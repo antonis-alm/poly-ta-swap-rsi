@@ -1,0 +1,45 @@
+{
+    "chain": "polygon",
+    "protocol": "uniswap_v3",
+    "base_token": "WMATIC",
+    "quote_token": "USDC",
+    "pool_address": "0xb6e57ed85c4c9dbfef2a68711e9d6f36c56e0fcb",
+    "pool_fee_bps": 500,
+    "rsi_period": 14,
+    "rsi_timeframe": "5m",
+    "rsi_lower": 45,
+    "rsi_upper": 55,
+    "allocation_pct": "0.95",
+    "dust_buffer_base": "0.01",
+    "dust_buffer_quote": "1",
+    "min_swap_value_usd": "1",
+    "min_expected_out_usd": "0.8",
+    "max_slippage_bps": 30,
+    "max_price_impact_bps": 80,
+    "max_price_impact_pct": "0.08",
+    "max_gas_ratio": "0.05",
+    "min_pool_tvl_usd": "0",
+    "min_pool_liquidity_raw": "1",
+    "cooldown_candles": 1,
+    "max_consecutive_failures": 3,
+    "force_action": "",
+    "token_funding": [
+        {
+            "symbol": "WMATIC",
+            "address": "0x0d500b1d8e8ef31e21c99d1db9a6444d3adf1270",
+            "amount": "3",
+            "amount_type": "usd"
+        },
+        {
+            "symbol": "USDC",
+            "address": "0x3c499c542cef5e3811e1192ce70d8cc03d5c3359",
+            "amount": "3",
+            "amount_type": "usd"
+        }
+    ],
+    "anvil_funding": {
+        "MATIC": 1000,
+        "WMATIC": 500,
+        "USDC": 50000
+    }
+}

@@ -1,0 +1,5 @@
+{
+  "display_name": "Poly TA Swap RSI Dashboard",
+  "description": "RSI regime-flipping WMATIC/USDC strategy dashboard for Polygon Uniswap V3 with state-machine and risk controls.",
+  "icon": "📈"
+}
