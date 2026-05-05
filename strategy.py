@@ -409,6 +409,8 @@ class PolyTASwapRSIStrategy(IntentStrategy):
             return self._hold(
                 "Strategy halted after repeated swap failures",
                 consecutive_failed_swaps=self.consecutive_failed_swaps,
+                previous_rsi=str(self.prev_rsi) if self.prev_rsi is not None else None,
+                current_rsi=str(self.prev_rsi) if self.prev_rsi is not None else None,
             )
 
         if self.force_action:
@@ -421,6 +423,8 @@ class PolyTASwapRSIStrategy(IntentStrategy):
                 "Awaiting confirmed candle close",
                 candle_index=candle_index,
                 last_processed_candle=self.last_processed_candle,
+                previous_rsi=str(self.prev_rsi) if self.prev_rsi is not None else None,
+                current_rsi=str(self.prev_rsi) if self.prev_rsi is not None else None,
             )
 
         if candle_index < self.cooldown_until_candle:
@@ -429,6 +433,8 @@ class PolyTASwapRSIStrategy(IntentStrategy):
                 "Cooldown active",
                 candle_index=candle_index,
                 cooldown_until_candle=self.cooldown_until_candle,
+                previous_rsi=str(self.prev_rsi) if self.prev_rsi is not None else None,
+                current_rsi=str(self.prev_rsi) if self.prev_rsi is not None else None,
             )
 
         try:
@@ -440,6 +446,8 @@ class PolyTASwapRSIStrategy(IntentStrategy):
                 candle_index=candle_index,
                 rsi_source=self.rsi_source,
                 error=str(exc),
+                previous_rsi=str(self.prev_rsi) if self.prev_rsi is not None else None,
+                current_rsi=None,
             )
 
         if current_rsi is None:
@@ -450,6 +458,8 @@ class PolyTASwapRSIStrategy(IntentStrategy):
                 rsi_source=self.rsi_source,
                 close_count=rsi_meta.get("close_count"),
                 required_closes=self.rsi_period + 1,
+                previous_rsi=str(self.prev_rsi) if self.prev_rsi is not None else None,
+                current_rsi=None,
             )
 
         if self.prev_rsi is None:
