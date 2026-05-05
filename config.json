@@ -9,6 +9,8 @@
     "rsi_timeframe": "5m",
     "rsi_lower": 45,
     "rsi_upper": 55,
+    "rsi_source": "pool_quote_close",
+    "rsi_quote_amount": "1",
     "allocation_pct": "0.95",
     "dust_buffer_base": "0.01",
     "dust_buffer_quote": "1",

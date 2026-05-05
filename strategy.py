@@ -9,7 +9,6 @@ from almanak.framework.data.market_snapshot import (
     DexQuoteUnavailableError,
     PoolReservesUnavailableError,
     PriceUnavailableError,
-    RSIUnavailableError,
 )
 from almanak.framework.intents import Intent
 from almanak.framework.strategies import (
@@ -53,6 +52,8 @@ class PolyTASwapRSIStrategy(IntentStrategy):
         self.rsi_timeframe = str(self.get_config("rsi_timeframe", "5m"))
         self.rsi_lower = Decimal(str(self.get_config("rsi_lower", "45")))
         self.rsi_upper = Decimal(str(self.get_config("rsi_upper", "55")))
+        self.rsi_source = str(self.get_config("rsi_source", "snapshot")).lower()
+        self.rsi_quote_amount = Decimal(str(self.get_config("rsi_quote_amount", "1")))
 
         self.allocation_pct = Decimal(str(self.get_config("allocation_pct", "0.95")))
         self.dust_buffer_base = Decimal(str(self.get_config("dust_buffer_base", "0.01")))
@@ -77,6 +78,7 @@ class PolyTASwapRSIStrategy(IntentStrategy):
         self.regime_state = RegimeState.NEUTRAL.value
         self.position_state = RegimeState.NEUTRAL.value
         self.prev_rsi: Optional[Decimal] = None
+        self.rsi_close_prices: list[Decimal] = []
         self.last_processed_candle = -1
         self.cooldown_until_candle = -1
         self.pending_target_state: Optional[str] = None
@@ -112,6 +114,80 @@ class PolyTASwapRSIStrategy(IntentStrategy):
     def _hold(self, reason: str, **fields: Any) -> Intent:
         self._record_decision(action="HOLD", reason=reason, **fields)
         return Intent.hold(reason=reason)
+
+    def _append_close_price(self, close_price: Decimal) -> None:
+        self.rsi_close_prices.append(close_price)
+        max_points = max(self.rsi_period * 5, 100)
+        if len(self.rsi_close_prices) > max_points:
+            self.rsi_close_prices = self.rsi_close_prices[-max_points:]
+
+    def _compute_window_rsi(self) -> Optional[Decimal]:
+        if len(self.rsi_close_prices) < self.rsi_period + 1:
+            return None
+
+        window = self.rsi_close_prices[-(self.rsi_period + 1) :]
+        gains = Decimal("0")
+        losses = Decimal("0")
+        for idx in range(1, len(window)):
+            delta = window[idx] - window[idx - 1]
+            if delta > 0:
+                gains += delta
+            elif delta < 0:
+                losses += abs(delta)
+
+        avg_gain = gains / Decimal(str(self.rsi_period))
+        avg_loss = losses / Decimal(str(self.rsi_period))
+
+        if avg_loss == 0 and avg_gain == 0:
+            return Decimal("50")
+        if avg_loss == 0:
+            return Decimal("100")
+
+        rs = avg_gain / avg_loss
+        return Decimal("100") - (Decimal("100") / (Decimal("1") + rs))
+
+    def _fetch_pool_close_price(self, market: MarketSnapshot) -> Decimal:
+        probe_amount = self.rsi_quote_amount
+        if probe_amount <= 0:
+            raise ValueError("rsi_quote_amount must be positive")
+
+        best = market.best_dex_price(
+            token_in=self.base_token,
+            token_out=self.quote_token,
+            amount=probe_amount,
+            dexs=[self.protocol],
+        )
+        best_quote = getattr(best, "best_quote", None)
+        if best_quote is None:
+            raise ValueError("No quote returned for RSI source")
+
+        amount_out = Decimal(str(getattr(best_quote, "amount_out", "0") or "0"))
+        if amount_out <= 0:
+            raise ValueError("Invalid quote amount_out for RSI source")
+
+        return amount_out / probe_amount
+
+    def _resolve_rsi(self, market: MarketSnapshot) -> tuple[Optional[Decimal], dict[str, Any]]:
+        if self.rsi_source == "pool_quote_close":
+            close_price = self._fetch_pool_close_price(market)
+            self._append_close_price(close_price)
+            current_rsi = self._compute_window_rsi()
+            return current_rsi, {
+                "rsi_source": self.rsi_source,
+                "close_price": str(close_price),
+                "close_count": len(self.rsi_close_prices),
+            }
+
+        rsi_data = market.rsi(
+            self.base_token,
+            period=self.rsi_period,
+            timeframe=self.rsi_timeframe,
+        )
+        return Decimal(str(rsi_data.value)), {
+            "rsi_source": self.rsi_source,
+            "close_price": None,
+            "close_count": len(self.rsi_close_prices),
+        }
 
     def _build_swap_for_target(
         self,
@@ -356,16 +432,25 @@ class PolyTASwapRSIStrategy(IntentStrategy):
             )
 
         try:
-            rsi_data = market.rsi(
-                self.base_token,
-                period=self.rsi_period,
-                timeframe=self.rsi_timeframe,
-            )
-        except (RSIUnavailableError, ValueError) as exc:
+            current_rsi, rsi_meta = self._resolve_rsi(market)
+        except (DexQuoteUnavailableError, ValueError, Exception) as exc:
             self.last_processed_candle = candle_index
-            return self._hold("RSI data unavailable", candle_index=candle_index, error=str(exc))
+            return self._hold(
+                "RSI data unavailable",
+                candle_index=candle_index,
+                rsi_source=self.rsi_source,
+                error=str(exc),
+            )
 
-        current_rsi = Decimal(str(rsi_data.value))
+        if current_rsi is None:
+            self.last_processed_candle = candle_index
+            return self._hold(
+                "Warm-up candle, waiting for enough RSI source closes",
+                candle_index=candle_index,
+                rsi_source=self.rsi_source,
+                close_count=rsi_meta.get("close_count"),
+                required_closes=self.rsi_period + 1,
+            )
 
         if self.prev_rsi is None:
             self.prev_rsi = current_rsi
@@ -374,6 +459,7 @@ class PolyTASwapRSIStrategy(IntentStrategy):
                 "Warm-up candle, waiting for RSI cross",
                 candle_index=candle_index,
                 rsi=str(current_rsi),
+                **rsi_meta,
             )
 
         previous_rsi = self.prev_rsi
@@ -382,13 +468,16 @@ class PolyTASwapRSIStrategy(IntentStrategy):
 
         candle_start, candle_end = self._candle_bounds(candle_index)
         logger.info(
-            "rsi_close_diagnostic candle_index=%s candle_start=%s candle_end=%s observed_at=%s timeframe=%s period=%s prev_rsi=%s current_rsi=%s lower=%s upper=%s crossed_up=%s crossed_down=%s signal_state=%s position_state=%s",
+            "rsi_close_diagnostic candle_index=%s candle_start=%s candle_end=%s observed_at=%s timeframe=%s period=%s source=%s close_price=%s close_count=%s prev_rsi=%s current_rsi=%s lower=%s upper=%s crossed_up=%s crossed_down=%s signal_state=%s position_state=%s",
             candle_index,
             candle_start.isoformat(),
             candle_end.isoformat(),
             market.timestamp.astimezone(UTC).isoformat(),
             self.rsi_timeframe,
             self.rsi_period,
+            rsi_meta.get("rsi_source"),
+            rsi_meta.get("close_price"),
+            rsi_meta.get("close_count"),
             str(previous_rsi),
             str(current_rsi),
             str(self.rsi_lower),
@@ -415,6 +504,7 @@ class PolyTASwapRSIStrategy(IntentStrategy):
                 current_rsi=str(current_rsi),
                 signal_state=self.regime_state,
                 position_state=self.position_state,
+                **rsi_meta,
             )
 
         target_state = RegimeState.LONG_WMATIC if crossed_up else RegimeState.LONG_USDC
@@ -431,6 +521,7 @@ class PolyTASwapRSIStrategy(IntentStrategy):
                 position_state=self.position_state,
                 target_state=target_state.value,
                 current_rsi=str(current_rsi),
+                **rsi_meta,
             )
 
         decision = self._build_swap_for_target(
@@ -485,6 +576,7 @@ class PolyTASwapRSIStrategy(IntentStrategy):
             "regime_state": self.regime_state,
             "position_state": self.position_state,
             "prev_rsi": str(self.prev_rsi) if self.prev_rsi is not None else None,
+            "rsi_close_prices": [str(v) for v in self.rsi_close_prices],
             "last_processed_candle": self.last_processed_candle,
             "cooldown_until_candle": self.cooldown_until_candle,
             "pending_target_state": self.pending_target_state,
@@ -500,6 +592,8 @@ class PolyTASwapRSIStrategy(IntentStrategy):
         self.position_state = str(state.get("position_state", self.regime_state))
         prev_rsi = state.get("prev_rsi")
         self.prev_rsi = Decimal(str(prev_rsi)) if prev_rsi is not None else None
+        close_prices = state.get("rsi_close_prices", [])
+        self.rsi_close_prices = [Decimal(str(v)) for v in close_prices]
         self.last_processed_candle = int(state.get("last_processed_candle", -1))
         self.cooldown_until_candle = int(state.get("cooldown_until_candle", -1))
         self.pending_target_state = state.get("pending_target_state")
@@ -516,6 +610,8 @@ class PolyTASwapRSIStrategy(IntentStrategy):
             "position_state": self.position_state,
             "pending_target_state": self.pending_target_state,
             "prev_rsi": str(self.prev_rsi) if self.prev_rsi is not None else None,
+            "rsi_source": self.rsi_source,
+            "rsi_close_count": len(self.rsi_close_prices),
             "cooldown_until_candle": self.cooldown_until_candle,
             "consecutive_failed_swaps": self.consecutive_failed_swaps,
             "halted": self.halted,
