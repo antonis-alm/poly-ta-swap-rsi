@@ -75,6 +75,7 @@ class PolyTASwapRSIStrategy(IntentStrategy):
         self.force_action = str(self.get_config("force_action", "") or "").lower()
 
         self.regime_state = RegimeState.NEUTRAL.value
+        self.position_state = RegimeState.NEUTRAL.value
         self.prev_rsi: Optional[Decimal] = None
         self.last_processed_candle = -1
         self.cooldown_until_candle = -1
@@ -94,6 +95,12 @@ class PolyTASwapRSIStrategy(IntentStrategy):
 
     def _candle_index(self, timestamp: datetime) -> int:
         return int(timestamp.replace(tzinfo=UTC).timestamp() // self._timeframe_seconds())
+
+    def _candle_bounds(self, candle_index: int) -> tuple[datetime, datetime]:
+        timeframe_seconds = self._timeframe_seconds()
+        start = datetime.fromtimestamp(candle_index * timeframe_seconds, tz=UTC)
+        end = datetime.fromtimestamp((candle_index + 1) * timeframe_seconds, tz=UTC)
+        return start, end
 
     def _record_decision(self, **fields: Any) -> None:
         self._last_decision = {
@@ -278,7 +285,8 @@ class PolyTASwapRSIStrategy(IntentStrategy):
             action="SWAP",
             signal=signal,
             rsi=str(rsi_value) if rsi_value is not None else None,
-            current_state=self.regime_state,
+            signal_state=self.regime_state,
+            position_state=self.position_state,
             target_state=target_state.value,
             from_token=source_token,
             to_token=target_token,
@@ -368,31 +376,59 @@ class PolyTASwapRSIStrategy(IntentStrategy):
                 rsi=str(current_rsi),
             )
 
-        crossed_up = self.prev_rsi <= self.rsi_upper and current_rsi > self.rsi_upper
-        crossed_down = self.prev_rsi >= self.rsi_lower and current_rsi < self.rsi_lower
+        previous_rsi = self.prev_rsi
+        crossed_up = previous_rsi <= self.rsi_upper and current_rsi > self.rsi_upper
+        crossed_down = previous_rsi >= self.rsi_lower and current_rsi < self.rsi_lower
+
+        candle_start, candle_end = self._candle_bounds(candle_index)
+        logger.info(
+            "rsi_close_diagnostic candle_index=%s candle_start=%s candle_end=%s observed_at=%s timeframe=%s period=%s prev_rsi=%s current_rsi=%s lower=%s upper=%s crossed_up=%s crossed_down=%s signal_state=%s position_state=%s",
+            candle_index,
+            candle_start.isoformat(),
+            candle_end.isoformat(),
+            market.timestamp.astimezone(UTC).isoformat(),
+            self.rsi_timeframe,
+            self.rsi_period,
+            str(previous_rsi),
+            str(current_rsi),
+            str(self.rsi_lower),
+            str(self.rsi_upper),
+            crossed_up,
+            crossed_down,
+            self.regime_state,
+            self.position_state,
+        )
 
         if not crossed_up and not crossed_down:
-            self.regime_state = RegimeState.NEUTRAL.value
+            if self.rsi_lower <= current_rsi <= self.rsi_upper:
+                self.regime_state = RegimeState.NEUTRAL.value
+            elif current_rsi > self.rsi_upper:
+                self.regime_state = RegimeState.LONG_WMATIC.value
+            else:
+                self.regime_state = RegimeState.LONG_USDC.value
             self.prev_rsi = current_rsi
             self.last_processed_candle = candle_index
             return self._hold(
                 "RSI in hold zone or no crossing event",
                 candle_index=candle_index,
-                previous_rsi=str(self.prev_rsi),
+                previous_rsi=str(previous_rsi),
                 current_rsi=str(current_rsi),
-                state=self.regime_state,
+                signal_state=self.regime_state,
+                position_state=self.position_state,
             )
 
         target_state = RegimeState.LONG_WMATIC if crossed_up else RegimeState.LONG_USDC
         signal = "cross_above_upper" if crossed_up else "cross_below_lower"
 
-        if self.regime_state == target_state.value:
+        if self.position_state == target_state.value:
+            self.regime_state = target_state.value
             self.prev_rsi = current_rsi
             self.last_processed_candle = candle_index
             return self._hold(
                 "Already in target state",
                 signal=signal,
-                current_state=self.regime_state,
+                signal_state=self.regime_state,
+                position_state=self.position_state,
                 target_state=target_state.value,
                 current_rsi=str(current_rsi),
             )
@@ -422,6 +458,7 @@ class PolyTASwapRSIStrategy(IntentStrategy):
             self.consecutive_failed_swaps = 0
             if self.pending_target_state:
                 self.regime_state = self.pending_target_state
+                self.position_state = self.pending_target_state
             self.pending_target_state = None
             self.cooldown_until_candle = self.last_processed_candle + self.cooldown_candles
             logger.info(
@@ -446,6 +483,7 @@ class PolyTASwapRSIStrategy(IntentStrategy):
     def get_persistent_state(self) -> dict[str, Any]:
         return {
             "regime_state": self.regime_state,
+            "position_state": self.position_state,
             "prev_rsi": str(self.prev_rsi) if self.prev_rsi is not None else None,
             "last_processed_candle": self.last_processed_candle,
             "cooldown_until_candle": self.cooldown_until_candle,
@@ -459,6 +497,7 @@ class PolyTASwapRSIStrategy(IntentStrategy):
         if not state:
             return
         self.regime_state = str(state.get("regime_state", RegimeState.NEUTRAL.value))
+        self.position_state = str(state.get("position_state", self.regime_state))
         prev_rsi = state.get("prev_rsi")
         self.prev_rsi = Decimal(str(prev_rsi)) if prev_rsi is not None else None
         self.last_processed_candle = int(state.get("last_processed_candle", -1))
@@ -473,7 +512,8 @@ class PolyTASwapRSIStrategy(IntentStrategy):
             "strategy": "poly_t_a_swap_r_s_i",
             "chain": self.chain,
             "wallet": self.wallet_address,
-            "state": self.regime_state,
+            "signal_state": self.regime_state,
+            "position_state": self.position_state,
             "pending_target_state": self.pending_target_state,
             "prev_rsi": str(self.prev_rsi) if self.prev_rsi is not None else None,
             "cooldown_until_candle": self.cooldown_until_candle,

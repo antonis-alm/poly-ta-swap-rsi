@@ -201,6 +201,7 @@ def test_already_in_target_state_skips_repeat_swap(base_config: dict) -> None:
     strategy = create_strategy(base_config)
     strategy.prev_rsi = Decimal("55")
     strategy.regime_state = RegimeState.LONG_WMATIC.value
+    strategy.position_state = RegimeState.LONG_WMATIC.value
     ts = datetime(2026, 1, 1, 0, 5, tzinfo=UTC)
 
     intent = strategy.decide(build_market(ts=ts, rsi=Decimal("56")))
@@ -291,6 +292,7 @@ def test_failed_swap_stop_halts_strategy(base_config: dict) -> None:
 def test_persistent_state_round_trip(base_config: dict) -> None:
     strategy = create_strategy(base_config)
     strategy.regime_state = RegimeState.LONG_WMATIC.value
+    strategy.position_state = RegimeState.LONG_WMATIC.value
     strategy.prev_rsi = Decimal("58")
     strategy.cooldown_until_candle = 123
     strategy.consecutive_failed_swaps = 1
@@ -301,6 +303,7 @@ def test_persistent_state_round_trip(base_config: dict) -> None:
     fresh.load_persistent_state(saved)
 
     assert fresh.regime_state == RegimeState.LONG_WMATIC.value
+    assert fresh.position_state == RegimeState.LONG_WMATIC.value
     assert fresh.prev_rsi == Decimal("58")
     assert fresh.cooldown_until_candle == 123
     assert fresh.consecutive_failed_swaps == 1
