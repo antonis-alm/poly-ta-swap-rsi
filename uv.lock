@@ -1935,7 +1935,7 @@ dependencies = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "almanak", specifier = ">=2.15.0" }]
+requires-dist = [{ name = "almanak", specifier = "==2.15.1rc14" }]
 
 [[package]]
 name = "prometheus-client"
