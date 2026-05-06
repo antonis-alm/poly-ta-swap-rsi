@@ -4,12 +4,6 @@ from decimal import Decimal
 from enum import Enum
 from typing import Any, Optional
 
-from almanak.framework.data.market_snapshot import (
-    BalanceUnavailableError,
-    DexQuoteUnavailableError,
-    PoolReservesUnavailableError,
-    PriceUnavailableError,
-)
 from almanak.framework.intents import Intent
 from almanak.framework.strategies import (
     IntentStrategy,
@@ -208,7 +202,7 @@ class PolyTASwapRSIStrategy(IntentStrategy):
         try:
             source_balance: TokenBalance = market.balance(source_token)
             target_balance: TokenBalance = market.balance(target_token)
-        except (BalanceUnavailableError, ValueError) as exc:
+        except ValueError as exc:
             return self._hold(
                 "Balance data unavailable",
                 signal=signal,
@@ -247,42 +241,43 @@ class PolyTASwapRSIStrategy(IntentStrategy):
         if not self.pool_address:
             return self._hold("pool_address is not configured", signal=signal)
 
-        try:
-            pool = market.pool_reserves(self.pool_address, chain=self.chain)
-        except (PoolReservesUnavailableError, ValueError) as exc:
-            return self._hold(
-                "Pool reserves unavailable",
-                signal=signal,
-                error=str(exc),
-                pool_address=self.pool_address,
-            )
+        if hasattr(market, "pool_reserves"):
+            try:
+                pool = market.pool_reserves(self.pool_address, chain=self.chain)
+            except ValueError as exc:
+                return self._hold(
+                    "Pool reserves unavailable",
+                    signal=signal,
+                    error=str(exc),
+                    pool_address=self.pool_address,
+                )
 
-        pool_fee = int(getattr(pool, "fee_tier", 0) or 0)
-        if pool_fee and pool_fee != self.pool_fee_bps:
-            return self._hold(
-                "Pool fee tier mismatch",
-                signal=signal,
-                expected_fee_bps=self.pool_fee_bps,
-                actual_fee_bps=pool_fee,
-            )
+            pool_fee = int(getattr(pool, "fee_tier", 0) or 0)
+            if pool_fee and pool_fee != self.pool_fee_bps:
+                return self._hold(
+                    "Pool fee tier mismatch",
+                    signal=signal,
+                    expected_fee_bps=self.pool_fee_bps,
+                    actual_fee_bps=pool_fee,
+                )
 
-        liquidity = Decimal(str(getattr(pool, "liquidity", "0") or "0"))
-        if liquidity < self.min_pool_liquidity_raw:
-            return self._hold(
-                "Pool liquidity too low",
-                signal=signal,
-                liquidity=str(liquidity),
-                min_liquidity=str(self.min_pool_liquidity_raw),
-            )
+            liquidity = Decimal(str(getattr(pool, "liquidity", "0") or "0"))
+            if liquidity < self.min_pool_liquidity_raw:
+                return self._hold(
+                    "Pool liquidity too low",
+                    signal=signal,
+                    liquidity=str(liquidity),
+                    min_liquidity=str(self.min_pool_liquidity_raw),
+                )
 
-        pool_tvl = Decimal(str(getattr(pool, "tvl_usd", "0") or "0"))
-        if self.min_pool_tvl_usd > 0 and pool_tvl < self.min_pool_tvl_usd:
-            return self._hold(
-                "Pool TVL below minimum",
-                signal=signal,
-                pool_tvl_usd=str(pool_tvl),
-                min_pool_tvl_usd=str(self.min_pool_tvl_usd),
-            )
+            pool_tvl = Decimal(str(getattr(pool, "tvl_usd", "0") or "0"))
+            if self.min_pool_tvl_usd > 0 and pool_tvl < self.min_pool_tvl_usd:
+                return self._hold(
+                    "Pool TVL below minimum",
+                    signal=signal,
+                    pool_tvl_usd=str(pool_tvl),
+                    min_pool_tvl_usd=str(self.min_pool_tvl_usd),
+                )
 
         try:
             best = market.best_dex_price(
@@ -291,7 +286,7 @@ class PolyTASwapRSIStrategy(IntentStrategy):
                 amount=swap_amount,
                 dexs=[self.protocol],
             )
-        except (DexQuoteUnavailableError, ValueError) as exc:
+        except (NotImplementedError, ValueError) as exc:
             return self._hold("DEX quote unavailable", signal=signal, error=str(exc))
 
         best_quote = getattr(best, "best_quote", None)
@@ -327,7 +322,7 @@ class PolyTASwapRSIStrategy(IntentStrategy):
 
         try:
             target_price = market.price(target_token)
-        except (PriceUnavailableError, ValueError) as exc:
+        except ValueError as exc:
             return self._hold(
                 "Target price unavailable",
                 signal=signal,
@@ -439,7 +434,7 @@ class PolyTASwapRSIStrategy(IntentStrategy):
 
         try:
             current_rsi, rsi_meta = self._resolve_rsi(market)
-        except (DexQuoteUnavailableError, ValueError, Exception) as exc:
+        except Exception as exc:
             self.last_processed_candle = candle_index
             return self._hold(
                 "RSI data unavailable",
@@ -654,7 +649,7 @@ class PolyTASwapRSIStrategy(IntentStrategy):
                         },
                     )
                 )
-        except (BalanceUnavailableError, ValueError, RuntimeError):
+        except (ValueError, RuntimeError):
             logger.warning("Failed to query open positions for teardown")
 
         return TeardownPositionSummary(
@@ -669,7 +664,7 @@ class PolyTASwapRSIStrategy(IntentStrategy):
         snapshot = market or self.create_market_snapshot()
         try:
             base_balance: TokenBalance = snapshot.balance(self.base_token)
-        except (BalanceUnavailableError, ValueError, RuntimeError):
+        except (ValueError, RuntimeError):
             return []
 
         if base_balance.balance <= self.dust_buffer_base:
