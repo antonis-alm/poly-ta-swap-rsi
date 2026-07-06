@@ -5,12 +5,8 @@ from enum import Enum
 from typing import Any, Optional
 
 from almanak.framework.intents import Intent
-from almanak.framework.strategies import (
-    IntentStrategy,
-    MarketSnapshot,
-    TokenBalance,
-    almanak_strategy,
-)
+from almanak.framework.market import MarketSnapshot, TokenBalance
+from almanak.framework.strategies import IntentStrategy, almanak_strategy
 
 logger = logging.getLogger(__name__)
 
@@ -653,7 +649,11 @@ class PolyTASwapRSIStrategy(IntentStrategy):
             logger.warning("Failed to query open positions for teardown")
 
         return TeardownPositionSummary(
-            strategy_id=getattr(self, "strategy_id", "poly_t_a_swap_r_s_i"),
+            deployment_id=getattr(
+                self,
+                "deployment_id",
+                getattr(self, "strategy_id", "poly_t_a_swap_r_s_i"),
+            ),
             timestamp=datetime.now(UTC),
             positions=positions,
         )

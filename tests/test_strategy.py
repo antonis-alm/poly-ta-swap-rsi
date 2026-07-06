@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from almanak.framework.strategies import MarketSnapshot, RSIData, TokenBalance
+from almanak.framework.market import MarketSnapshot, RSIData, TokenBalance
 from almanak.framework.teardown import TeardownMode
 from strategy import PolyTASwapRSIStrategy, RegimeState
 
